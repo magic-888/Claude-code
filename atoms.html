@@ -58,9 +58,7 @@
             cursor: pointer;
         }
 
-        #tilt-btn:hover {
-            background: rgba(100, 180, 255, 0.08);
-        }
+        #tilt-btn:hover { background: rgba(100, 180, 255, 0.08); }
     </style>
 </head>
 <body>
@@ -74,7 +72,7 @@
         const ctx = canvas.getContext('2d');
         const tiltBtn = document.getElementById('tilt-btn');
 
-        // iOS 13+ requires explicit permission for DeviceOrientationEvent
+        // iOS 13+ requires explicit permission
         if (typeof DeviceOrientationEvent !== 'undefined' &&
                 typeof DeviceOrientationEvent.requestPermission === 'function') {
             tiltBtn.style.display = 'block';
@@ -84,43 +82,62 @@
             });
         }
 
-        // Canvas size — fits comfortably on any phone or desktop
+        // ── Sizing ────────────────────────────────────────────────────────
         const SIZE = Math.min(window.innerWidth * 0.88, window.innerHeight * 0.70, 500);
         canvas.width = SIZE;
         canvas.height = SIZE;
 
-        // Jar inner rectangle
+        // Outer jar
         const PAD = SIZE * 0.07;
         const JAR = { x: PAD, y: PAD, w: SIZE - PAD * 2, h: SIZE - PAD * 2, r: SIZE * 0.065 };
 
-        // Physics constants
-        const BASE_R   = SIZE * 0.027;       // nominal particle radius
-        const N        = Math.max(45, Math.floor(SIZE * 0.115)); // particle count
-        const DAMPING  = 0.976;
-        const BOUNCE   = 0.45;
-        const REP      = SIZE * 0.00078;     // repulsion force magnitude
+        // ── Physics constants ─────────────────────────────────────────────
+        const BASE_R  = SIZE * 0.027;
+        const N       = Math.max(45, Math.floor(SIZE * 0.115));
+        const DAMPING = 0.976;
+        const BOUNCE  = 0.45;
+        const REP     = SIZE * 0.00078;
 
-        // Gravity vector (updated by orientation)
+        // ── Collection box (open at top, sits on jar floor) ───────────────
+        const WALL_T = BASE_R * 0.75;          // wall thickness
+        const BOX_W  = JAR.w * 0.46;
+        const BOX_H  = JAR.h * 0.29;
+        const BOX = {
+            x:  JAR.x + (JAR.w - BOX_W) / 2,
+            y:  JAR.y + JAR.h - BOX_H,         // anchored to jar floor
+            w:  BOX_W,
+            h:  BOX_H,
+            wt: WALL_T,
+        };
+
+        // Three solid wall rects that make up the box (open at top)
+        const boxWalls = [
+            { x: BOX.x,                       y: BOX.y, w: BOX.wt,  h: BOX.h },  // left wall
+            { x: BOX.x + BOX.w - BOX.wt,      y: BOX.y, w: BOX.wt,  h: BOX.h },  // right wall
+            { x: BOX.x, y: BOX.y + BOX.h - BOX.wt, w: BOX.w, h: BOX.wt },        // bottom wall
+        ];
+
+        // ── Gravity ───────────────────────────────────────────────────────
         let gx = 0, gy = 0.28;
 
-        // Create particles
+        // ── Particles ─────────────────────────────────────────────────────
         const particles = Array.from({ length: N }, () => {
             const r = BASE_R * (0.82 + Math.random() * 0.36);
             return {
                 x: JAR.x + r + Math.random() * (JAR.w - r * 2),
-                y: JAR.y + r + Math.random() * (JAR.h * 0.55),
+                y: JAR.y + r + Math.random() * (JAR.h * 0.50),
                 vx: (Math.random() - 0.5) * 1.2,
                 vy: (Math.random() - 0.5) * 1.2,
                 r,
-                hue: 190 + Math.floor(Math.random() * 5) * 12, // blue-cyan palette
+                hue: 190 + Math.floor(Math.random() * 5) * 12,
             };
         });
 
-        // ── Pointer tracking (mouse + touch) ──────────────────────────────
+        // ── Pointer tracking ──────────────────────────────────────────────
         let pointers = [];
-
         let mouseHeld = false;
-        canvas.addEventListener('mousedown', e => { mouseHeld = true; updateMouse(e); });
+
+        canvas.addEventListener('mousedown', e => { mouseHeld = true;  updateMouse(e); });
         canvas.addEventListener('mousemove', e => { if (mouseHeld) updateMouse(e); });
         window.addEventListener('mouseup',   () => { mouseHeld = false; pointers = []; });
 
@@ -141,12 +158,10 @@
             }));
         }
 
-        // ── Device orientation → gravity ──────────────────────────────────
+        // ── Device orientation ────────────────────────────────────────────
         window.addEventListener('deviceorientation', e => {
             if (e.beta === null) return;
             const maxG = 0.40;
-            // gamma: left/right tilt (-90…90), beta: front/back tilt (-180…180)
-            // When phone is upright portrait, beta≈90 → sin(90°)=1 → full downward gravity
             gx = clamp(Math.sin(e.gamma * Math.PI / 180) * maxG, -maxG, maxG);
             gy = clamp(Math.sin(e.beta  * Math.PI / 180) * maxG, -maxG, maxG);
         });
@@ -158,8 +173,7 @@
             if (now - lastShake < 100) return;
             const acc = e.acceleration;
             if (!acc) return;
-            const mag = Math.hypot(acc.x || 0, acc.y || 0, acc.z || 0);
-            if (mag > 18) {
+            if (Math.hypot(acc.x || 0, acc.y || 0, acc.z || 0) > 18) {
                 lastShake = now;
                 particles.forEach(p => {
                     p.vx += (Math.random() - 0.5) * 12;
@@ -167,6 +181,51 @@
                 });
             }
         });
+
+        // ── Box wall collision (circle vs AABB) ───────────────────────────
+        function rectCollide(p, rx, ry, rw, rh) {
+            const cx = clamp(p.x, rx, rx + rw);
+            const cy = clamp(p.y, ry, ry + rh);
+            const dx = p.x - cx, dy = p.y - cy;
+            const d2 = dx * dx + dy * dy;
+            if (d2 >= p.r * p.r) return;
+
+            let nx, ny, overlap;
+            if (d2 < 1e-6) {
+                // Center is inside the rect — push toward nearest edge
+                const dL = p.x - rx, dR = rx + rw - p.x;
+                const dT = p.y - ry, dB = ry + rh - p.y;
+                const m  = Math.min(dL, dR, dT, dB);
+                if      (m === dL) { nx = -1; ny = 0; overlap = p.r + dL; }
+                else if (m === dR) { nx =  1; ny = 0; overlap = p.r + dR; }
+                else if (m === dT) { nx = 0; ny = -1; overlap = p.r + dT; }
+                else               { nx = 0; ny =  1; overlap = p.r + dB; }
+            } else {
+                const d = Math.sqrt(d2);
+                nx = dx / d; ny = dy / d;
+                overlap = p.r - d;
+            }
+
+            p.x += nx * overlap;
+            p.y += ny * overlap;
+            const dot = p.vx * nx + p.vy * ny;
+            if (dot < 0) {
+                p.vx -= (1 + BOUNCE) * dot * nx;
+                p.vy -= (1 + BOUNCE) * dot * ny;
+            }
+        }
+
+        // Returns true if atom's centre is inside the open box interior
+        function isInBox(p) {
+            return p.x > BOX.x + BOX.wt &&
+                   p.x < BOX.x + BOX.w - BOX.wt &&
+                   p.y > BOX.y &&
+                   p.y < BOX.y + BOX.h - BOX.wt;
+        }
+
+        // ── Win state ─────────────────────────────────────────────────────
+        let won = false;
+        let winTime = 0;
 
         // ── Physics update ────────────────────────────────────────────────
         function update() {
@@ -176,14 +235,12 @@
             for (let i = 0; i < particles.length; i++) {
                 const p = particles[i];
 
-                // Gravity
                 p.vx += gx;
                 p.vy += gy;
 
-                // Repulsion from touch / mouse pointers
+                // Touch / mouse repulsion
                 for (const pt of pointers) {
-                    const dx = p.x - pt.x;
-                    const dy = p.y - pt.y;
+                    const dx = p.x - pt.x, dy = p.y - pt.y;
                     const d2 = dx * dx + dy * dy;
                     if (d2 < TOUCH_R * TOUCH_R && d2 > 0.01) {
                         const d = Math.sqrt(d2);
@@ -193,38 +250,47 @@
                     }
                 }
 
-                // Particle-particle repulsion (gives fluid pressure)
+                // Particle-particle repulsion
                 for (let j = i + 1; j < particles.length; j++) {
                     const q = particles[j];
-                    const dx = p.x - q.x;
-                    const dy = p.y - q.y;
+                    const dx = p.x - q.x, dy = p.y - q.y;
                     const d2 = dx * dx + dy * dy;
                     const minD = (p.r + q.r) * 1.45;
                     if (d2 < minD * minD && d2 > 0.01) {
                         const d = Math.sqrt(d2);
                         const f = REP * (1 - d / minD);
-                        const fx = dx / d * f;
-                        const fy = dy / d * f;
-                        p.vx += fx;  p.vy += fy;
-                        q.vx -= fx;  q.vy -= fy;
+                        const fx = dx / d * f, fy = dy / d * f;
+                        p.vx += fx; p.vy += fy;
+                        q.vx -= fx; q.vy -= fy;
                     }
                 }
 
-                // Velocity damping
                 p.vx *= DAMPING;
                 p.vy *= DAMPING;
+                p.x  += p.vx;
+                p.y  += p.vy;
 
-                // Integrate position
-                p.x += p.vx;
-                p.y += p.vy;
-
-                // Bounce off jar walls
+                // Jar wall bounce
                 const lft = JAR.x + p.r, rgt = JAR.x + JAR.w - p.r;
                 const top = JAR.y + p.r, bot = JAR.y + JAR.h - p.r;
                 if (p.x < lft) { p.x = lft; p.vx =  Math.abs(p.vx) * BOUNCE; }
                 if (p.x > rgt) { p.x = rgt; p.vx = -Math.abs(p.vx) * BOUNCE; }
                 if (p.y < top) { p.y = top; p.vy =  Math.abs(p.vy) * BOUNCE; }
                 if (p.y > bot) { p.y = bot; p.vy = -Math.abs(p.vy) * BOUNCE; }
+
+                // Collection box wall collisions
+                for (const wall of boxWalls) {
+                    rectCollide(p, wall.x, wall.y, wall.w, wall.h);
+                }
+            }
+
+            // Count collected and check win
+            const collected = particles.filter(isInBox).length;
+            if (collected === N && !won) {
+                won = true;
+                winTime = performance.now();
+            } else if (collected < N) {
+                won = false; // can un-win if atoms escape
             }
         }
 
@@ -244,10 +310,57 @@
             ctx.closePath();
         }
 
+        function drawBox() {
+            const { x, y, w, h, wt } = BOX;
+
+            // Interior fill of the box
+            ctx.fillStyle = 'rgba(10, 30, 80, 0.55)';
+            ctx.fillRect(x + wt, y, w - wt * 2, h - wt);
+
+            // Draw the three open walls as glowing lines
+            ctx.save();
+            ctx.shadowColor = 'rgba(60, 220, 180, 0.6)';
+            ctx.shadowBlur  = 8;
+            ctx.strokeStyle = 'rgba(80, 230, 190, 0.80)';
+            ctx.lineWidth   = wt;
+            ctx.lineCap     = 'round';
+            ctx.lineJoin    = 'round';
+
+            ctx.beginPath();
+            // Left wall — right wall — bottom, drawn as one open-top path
+            ctx.moveTo(x + wt / 2, y);
+            ctx.lineTo(x + wt / 2, y + h - wt / 2);
+            ctx.lineTo(x + w - wt / 2, y + h - wt / 2);
+            ctx.lineTo(x + w - wt / 2, y);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function drawCounter(collected) {
+            const label    = won ? '★  All collected!  ★' : `${collected} / ${N} collected`;
+            const pulse    = won ? 0.7 + 0.3 * Math.sin((performance.now() - winTime) / 200) : 1;
+            const alpha    = won ? pulse : 0.55;
+            const color    = won
+                ? `rgba(80, 255, 180, ${alpha})`
+                : `rgba(140, 200, 255, ${alpha})`;
+
+            ctx.save();
+            ctx.font      = `${SIZE * 0.038}px Arial`;
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            if (won) {
+                ctx.shadowColor = 'rgba(80, 255, 180, 0.8)';
+                ctx.shadowBlur  = 14;
+            }
+            ctx.fillText(label, SIZE / 2, JAR.y + SIZE * 0.025);
+            ctx.restore();
+        }
+
         function draw() {
             ctx.clearRect(0, 0, SIZE, SIZE);
 
-            // Dark jar interior (drawn before clipping so atoms clip to it)
+            // Jar interior background
             ctx.save();
             jarPath();
             const bg = ctx.createLinearGradient(JAR.x, JAR.y, JAR.x, JAR.y + JAR.h);
@@ -256,43 +369,52 @@
             ctx.fillStyle = bg;
             ctx.fill();
 
-            // Clip particles to jar bounds
+            // Clip everything to jar
             jarPath();
             ctx.clip();
 
-            // Draw each atom
-            for (const p of particles) {
-                const speed = Math.hypot(p.vx, p.vy);
-                const hue = p.hue + speed * 10;
-                const lit  = 54 + speed * 7;
-                const gr   = p.r * (1.9 + speed * 0.15);
+            // Draw collection box (behind atoms)
+            drawBox();
 
-                // Soft glow
+            // Draw atoms
+            for (const p of particles) {
+                const inBox   = isInBox(p);
+                const speed   = Math.hypot(p.vx, p.vy);
+                const baseHue = inBox ? 140 + (won ? 20 * Math.sin(performance.now() / 300) : 0)
+                                      : p.hue;
+                const hue     = baseHue + speed * 10;
+                const lit     = 54 + speed * 7;
+                const gr      = p.r * (1.9 + speed * 0.15);
+
+                // Glow
                 const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, gr);
-                glow.addColorStop(0,   `hsla(${hue}, 90%, ${lit}%, 0.28)`);
-                glow.addColorStop(1,   `hsla(${hue}, 90%, ${lit}%, 0)`);
+                glow.addColorStop(0, `hsla(${hue}, 90%, ${lit}%, 0.28)`);
+                glow.addColorStop(1, `hsla(${hue}, 90%, ${lit}%, 0)`);
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, gr, 0, Math.PI * 2);
                 ctx.fillStyle = glow;
                 ctx.fill();
 
-                // Sphere core with highlight
+                // Sphere core
                 const core = ctx.createRadialGradient(
                     p.x - p.r * 0.33, p.y - p.r * 0.33, p.r * 0.04,
                     p.x, p.y, p.r
                 );
-                core.addColorStop(0,   `hsla(${hue}, 65%, 90%, 1)`);
-                core.addColorStop(0.38,`hsla(${hue}, 78%, 62%, 0.95)`);
-                core.addColorStop(1,   `hsla(${hue + 18}, 92%, 28%, 0.88)`);
+                core.addColorStop(0,    `hsla(${hue}, 65%, 90%, 1)`);
+                core.addColorStop(0.38, `hsla(${hue}, 78%, 62%, 0.95)`);
+                core.addColorStop(1,    `hsla(${hue + 18}, 92%, 28%, 0.88)`);
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
                 ctx.fillStyle = core;
                 ctx.fill();
             }
 
+            // Counter text (inside clip so it stays within jar)
+            drawCounter(particles.filter(isInBox).length);
+
             ctx.restore(); // remove clip
 
-            // Jar border drawn on top so it covers particle edges cleanly
+            // Jar border on top
             ctx.save();
             jarPath();
             ctx.shadowColor = 'rgba(80, 160, 255, 0.45)';
@@ -300,8 +422,6 @@
             ctx.strokeStyle = 'rgba(110, 185, 255, 0.60)';
             ctx.lineWidth   = 2.5;
             ctx.stroke();
-
-            // Subtle inner highlight on the left/top edge (glass look)
             ctx.shadowBlur  = 0;
             ctx.strokeStyle = 'rgba(210, 235, 255, 0.10)';
             ctx.lineWidth   = 5;
