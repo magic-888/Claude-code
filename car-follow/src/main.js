@@ -26,7 +26,12 @@ const configured = !FIREBASE_CONFIG.apiKey.startsWith('YOUR');
 let db = null;
 
 if (configured) {
-    db = getDatabase(initializeApp(FIREBASE_CONFIG));
+    try {
+        db = getDatabase(initializeApp(FIREBASE_CONFIG));
+    } catch (e) {
+        console.error('Firebase init failed:', e);
+        document.getElementById('setup-notice').style.display = 'flex';
+    }
 } else {
     document.getElementById('setup-notice').style.display = 'flex';
 }
