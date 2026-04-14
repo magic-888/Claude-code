@@ -104,7 +104,7 @@
         const BOX_H  = JAR.h * 0.29;
         const BOX = {
             x:  JAR.x + (JAR.w - BOX_W) / 2,
-            y:  JAR.y + JAR.h - BOX_H,         // anchored to jar floor
+            y:  JAR.y + (JAR.h - BOX_H) / 2,   // centred vertically in jar
             w:  BOX_W,
             h:  BOX_H,
             wt: WALL_T,
