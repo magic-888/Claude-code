@@ -12,13 +12,14 @@ import { getDatabase, ref, set, get, onValue, remove } from 'firebase/database';
 //  4. Paste your config values below and reload
 // ═══════════════════════════════════════════════════════════════
 const FIREBASE_CONFIG = {
-    apiKey:            "YOUR_API_KEY",
-    authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-    databaseURL:       "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
-    projectId:         "YOUR_PROJECT_ID",
-    storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId:             "YOUR_APP_ID",
+    apiKey:            "AIzaSyAiRpMLvhPiV_YkLsx46RGSo4KmHSXmM_0",
+    authDomain:        "webapp-65f96.firebaseapp.com",
+    databaseURL:       "https://webapp-65f96-default-rtdb.firebaseio.com",
+    projectId:         "webapp-65f96",
+    storageBucket:     "webapp-65f96.firebasestorage.app",
+    messagingSenderId: "334384748710",
+    appId:             "1:334384748710:web:f9d5dba902f41fa67efc67",
+    measurementId:     "G-L1HSEZ24HV",
 };
 // ═══════════════════════════════════════════════════════════════
 
