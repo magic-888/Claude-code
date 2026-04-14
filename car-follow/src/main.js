@@ -1,7 +1,5 @@
-import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
-import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, set, get, onValue, remove } from 'firebase/database';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getDatabase, ref, set, get, onValue, remove } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 
 // ═══════════════════════════════════════════════════════════════
 //  FIREBASE CONFIG
