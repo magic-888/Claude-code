@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Atom Jar</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0a14;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        h1 {
+            color: rgba(140, 200, 255, 0.65);
+            font-family: Arial, sans-serif;
+            font-size: 1rem;
+            font-weight: 300;
+            letter-spacing: 5px;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+
+        canvas {
+            display: block;
+            touch-action: none;
+        }
+
+        #hint {
+            color: rgba(140, 180, 255, 0.3);
+            font-family: Arial, sans-serif;
+            font-size: 0.7rem;
+            letter-spacing: 3px;
+            margin-top: 14px;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        #tilt-btn {
+            display: none;
+            margin-top: 10px;
+            padding: 7px 20px;
+            background: transparent;
+            border: 1px solid rgba(100, 180, 255, 0.35);
+            color: rgba(140, 200, 255, 0.6);
+            font-family: Arial, sans-serif;
+            font-size: 0.75rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            border-radius: 20px;
+            cursor: pointer;
+        }
+
+        #tilt-btn:hover {
+            background: rgba(100, 180, 255, 0.08);
+        }
+    </style>
+</head>
+<body>
+    <h1>Atom Jar</h1>
+    <canvas id="canvas"></canvas>
+    <p id="hint">touch &bull; tilt &bull; shake</p>
+    <button id="tilt-btn">Enable Tilt</button>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const tiltBtn = document.getElementById('tilt-btn');
+
+        // iOS 13+ requires explicit permission for DeviceOrientationEvent
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+                typeof DeviceOrientationEvent.requestPermission === 'function') {
+            tiltBtn.style.display = 'block';
+            tiltBtn.addEventListener('click', async () => {
+                const perm = await DeviceOrientationEvent.requestPermission();
+                if (perm === 'granted') tiltBtn.style.display = 'none';
+            });
+        }
+
+        // Canvas size — fits comfortably on any phone or desktop
+        const SIZE = Math.min(window.innerWidth * 0.88, window.innerHeight * 0.70, 500);
+        canvas.width = SIZE;
+        canvas.height = SIZE;
+
+        // Jar inner rectangle
+        const PAD = SIZE * 0.07;
+        const JAR = { x: PAD, y: PAD, w: SIZE - PAD * 2, h: SIZE - PAD * 2, r: SIZE * 0.065 };
+
+        // Physics constants
+        const BASE_R   = SIZE * 0.027;       // nominal particle radius
+        const N        = Math.max(45, Math.floor(SIZE * 0.115)); // particle count
+        const DAMPING  = 0.976;
+        const BOUNCE   = 0.45;
+        const REP      = SIZE * 0.00078;     // repulsion force magnitude
+
+        // Gravity vector (updated by orientation)
+        let gx = 0, gy = 0.28;
+
+        // Create particles
+        const particles = Array.from({ length: N }, () => {
+            const r = BASE_R * (0.82 + Math.random() * 0.36);
+            return {
+                x: JAR.x + r + Math.random() * (JAR.w - r * 2),
+                y: JAR.y + r + Math.random() * (JAR.h * 0.55),
+                vx: (Math.random() - 0.5) * 1.2,
+                vy: (Math.random() - 0.5) * 1.2,
+                r,
+                hue: 190 + Math.floor(Math.random() * 5) * 12, // blue-cyan palette
+            };
+        });
+
+        // ── Pointer tracking (mouse + touch) ──────────────────────────────
+        let pointers = [];
+
+        let mouseHeld = false;
+        canvas.addEventListener('mousedown', e => { mouseHeld = true; updateMouse(e); });
+        canvas.addEventListener('mousemove', e => { if (mouseHeld) updateMouse(e); });
+        window.addEventListener('mouseup',   () => { mouseHeld = false; pointers = []; });
+
+        function updateMouse(e) {
+            const rect = canvas.getBoundingClientRect();
+            pointers = [{ x: e.clientX - rect.left, y: e.clientY - rect.top }];
+        }
+
+        canvas.addEventListener('touchstart', e => { e.preventDefault(); syncTouches(e); }, { passive: false });
+        canvas.addEventListener('touchmove',  e => { e.preventDefault(); syncTouches(e); }, { passive: false });
+        canvas.addEventListener('touchend',   e => syncTouches(e));
+
+        function syncTouches(e) {
+            const rect = canvas.getBoundingClientRect();
+            pointers = Array.from(e.touches).map(t => ({
+                x: t.clientX - rect.left,
+                y: t.clientY - rect.top,
+            }));
+        }
+
+        // ── Device orientation → gravity ──────────────────────────────────
+        window.addEventListener('deviceorientation', e => {
+            if (e.beta === null) return;
+            const maxG = 0.40;
+            // gamma: left/right tilt (-90…90), beta: front/back tilt (-180…180)
+            // When phone is upright portrait, beta≈90 → sin(90°)=1 → full downward gravity
+            gx = clamp(Math.sin(e.gamma * Math.PI / 180) * maxG, -maxG, maxG);
+            gy = clamp(Math.sin(e.beta  * Math.PI / 180) * maxG, -maxG, maxG);
+        });
+
+        // ── Shake detection ───────────────────────────────────────────────
+        let lastShake = 0;
+        window.addEventListener('devicemotion', e => {
+            const now = Date.now();
+            if (now - lastShake < 100) return;
+            const acc = e.acceleration;
+            if (!acc) return;
+            const mag = Math.hypot(acc.x || 0, acc.y || 0, acc.z || 0);
+            if (mag > 18) {
+                lastShake = now;
+                particles.forEach(p => {
+                    p.vx += (Math.random() - 0.5) * 12;
+                    p.vy += (Math.random() - 0.5) * 12;
+                });
+            }
+        });
+
+        // ── Physics update ────────────────────────────────────────────────
+        function update() {
+            const TOUCH_R = SIZE * 0.20;
+            const TOUCH_F = 5.5;
+
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
+
+                // Gravity
+                p.vx += gx;
+                p.vy += gy;
+
+                // Repulsion from touch / mouse pointers
+                for (const pt of pointers) {
+                    const dx = p.x - pt.x;
+                    const dy = p.y - pt.y;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < TOUCH_R * TOUCH_R && d2 > 0.01) {
+                        const d = Math.sqrt(d2);
+                        const f = (1 - d / TOUCH_R) * TOUCH_F;
+                        p.vx += dx / d * f;
+                        p.vy += dy / d * f;
+                    }
+                }
+
+                // Particle-particle repulsion (gives fluid pressure)
+                for (let j = i + 1; j < particles.length; j++) {
+                    const q = particles[j];
+                    const dx = p.x - q.x;
+                    const dy = p.y - q.y;
+                    const d2 = dx * dx + dy * dy;
+                    const minD = (p.r + q.r) * 1.45;
+                    if (d2 < minD * minD && d2 > 0.01) {
+                        const d = Math.sqrt(d2);
+                        const f = REP * (1 - d / minD);
+                        const fx = dx / d * f;
+                        const fy = dy / d * f;
+                        p.vx += fx;  p.vy += fy;
+                        q.vx -= fx;  q.vy -= fy;
+                    }
+                }
+
+                // Velocity damping
+                p.vx *= DAMPING;
+                p.vy *= DAMPING;
+
+                // Integrate position
+                p.x += p.vx;
+                p.y += p.vy;
+
+                // Bounce off jar walls
+                const lft = JAR.x + p.r, rgt = JAR.x + JAR.w - p.r;
+                const top = JAR.y + p.r, bot = JAR.y + JAR.h - p.r;
+                if (p.x < lft) { p.x = lft; p.vx =  Math.abs(p.vx) * BOUNCE; }
+                if (p.x > rgt) { p.x = rgt; p.vx = -Math.abs(p.vx) * BOUNCE; }
+                if (p.y < top) { p.y = top; p.vy =  Math.abs(p.vy) * BOUNCE; }
+                if (p.y > bot) { p.y = bot; p.vy = -Math.abs(p.vy) * BOUNCE; }
+            }
+        }
+
+        // ── Drawing ───────────────────────────────────────────────────────
+        function jarPath() {
+            const { x, y, w, h, r } = JAR;
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, SIZE, SIZE);
+
+            // Dark jar interior (drawn before clipping so atoms clip to it)
+            ctx.save();
+            jarPath();
+            const bg = ctx.createLinearGradient(JAR.x, JAR.y, JAR.x, JAR.y + JAR.h);
+            bg.addColorStop(0, 'rgba(25, 45, 95, 0.55)');
+            bg.addColorStop(1, 'rgba(8, 18, 50, 0.75)');
+            ctx.fillStyle = bg;
+            ctx.fill();
+
+            // Clip particles to jar bounds
+            jarPath();
+            ctx.clip();
+
+            // Draw each atom
+            for (const p of particles) {
+                const speed = Math.hypot(p.vx, p.vy);
+                const hue = p.hue + speed * 10;
+                const lit  = 54 + speed * 7;
+                const gr   = p.r * (1.9 + speed * 0.15);
+
+                // Soft glow
+                const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, gr);
+                glow.addColorStop(0,   `hsla(${hue}, 90%, ${lit}%, 0.28)`);
+                glow.addColorStop(1,   `hsla(${hue}, 90%, ${lit}%, 0)`);
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, gr, 0, Math.PI * 2);
+                ctx.fillStyle = glow;
+                ctx.fill();
+
+                // Sphere core with highlight
+                const core = ctx.createRadialGradient(
+                    p.x - p.r * 0.33, p.y - p.r * 0.33, p.r * 0.04,
+                    p.x, p.y, p.r
+                );
+                core.addColorStop(0,   `hsla(${hue}, 65%, 90%, 1)`);
+                core.addColorStop(0.38,`hsla(${hue}, 78%, 62%, 0.95)`);
+                core.addColorStop(1,   `hsla(${hue + 18}, 92%, 28%, 0.88)`);
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                ctx.fillStyle = core;
+                ctx.fill();
+            }
+
+            ctx.restore(); // remove clip
+
+            // Jar border drawn on top so it covers particle edges cleanly
+            ctx.save();
+            jarPath();
+            ctx.shadowColor = 'rgba(80, 160, 255, 0.45)';
+            ctx.shadowBlur  = 14;
+            ctx.strokeStyle = 'rgba(110, 185, 255, 0.60)';
+            ctx.lineWidth   = 2.5;
+            ctx.stroke();
+
+            // Subtle inner highlight on the left/top edge (glass look)
+            ctx.shadowBlur  = 0;
+            ctx.strokeStyle = 'rgba(210, 235, 255, 0.10)';
+            ctx.lineWidth   = 5;
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    </script>
+</body>
+</html>
